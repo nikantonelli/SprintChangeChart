@@ -1,5 +1,5 @@
 # Sprint Change Chart
-![alt text]https://github.com/nikantonelli/SprintChangeChart/blob/master/Images/Image.png)
+![alt text](https://github.com/nikantonelli/SprintChangeChart/blob/master/Images/Image.png)
 
 This app looks into the LBAPI to pull changes to a field (of your selection) on a artefact type (of your selection) that could be involved with a particular iteration. The field type must have definite values (e.g. ScheduleState)
 
