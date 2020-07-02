@@ -135,6 +135,11 @@ Ext.define('Nik.Apps.SprintChangeChart', {
                         if (this.getRecord()!==false){
                             console.log("ready, firing fieldReady",field_picker,records);
                             gApp.fieldName = field_picker.getValue();
+                            gApp._getFieldValues().then({
+                                success: function() {
+                                    return;
+                                }
+                            });
                         } 
                         else {
                             console.log("ready, doing nothing",field_picker,records);
@@ -144,6 +149,11 @@ Ext.define('Nik.Apps.SprintChangeChart', {
                     select: function(field_picker,records) {
                         console.log("select, firing event",field_picker,records);
                         gApp.fieldName = field_picker.getValue();
+                        gApp._getFieldValues().then({
+                            success: function() {
+                                return;
+                            }
+                        });
                     },
                     // typeSelectedEvent: function(type_picker) {
                     //     this.artefactType = type_picker.getValue();
@@ -217,21 +227,34 @@ Ext.define('Nik.Apps.SprintChangeChart', {
 
     _showLegend: function(g) {
         var svg = d3.select('svg');
+        var aW = svg.attr('width')/gApp.fieldVals.length;
         var series = g.selectAll('g')
-            .data(gApp.uniqueStates)
+            .data(gApp.fieldVals)
             .enter()
             .append('g')
             .attr("transform", function(d,i) {
-                return "translate(" + ((+svg.attr('width')/4) + (i * 180)) + ',' + (+svg.attr('height') - 50) + ')';
+                return "translate(" + ((i * aW)+10) + ',' + (+svg.attr('height') - 50) + ')';
             });
 
         series.append('rect')
             .attr('height', 20)
-            .attr('width', 35)
+            .attr('width', 15)
             .attr("fill", (d, i) => z(i));
+
+        var cp = series.append('clipPath')
+            .attr('id', function(d) {
+                console.log( d);
+                return 'clipPath-'+d.data;
+            });
+        
+        cp.append('rect')
+            .attr('width', (aW - 5))
+            .attr('height', 20)
+
         series.append('text')
+            .attr('clip-path', function(d) { return 'url(#clipPath-'+d.data+')' ;})
             .attr('class', 'normalText')
-            .attr('x', 40)
+            .attr('x', 20)
             .attr('y', 15)
             .text( d => d);
     },
@@ -263,12 +286,11 @@ Ext.define('Nik.Apps.SprintChangeChart', {
         Deft.Promise.all(promises).then( {
             scope: me,
             success: function(allsnapshots) {
-                gApp.allSnapShots = allsnapshots;   //We want to index into this later
+                me.allSnapShots = allsnapshots;   //We want to index into this later
                 var f = _.flatten(allsnapshots);
-                gApp.uniqueStates = _.pluck(_.uniq(f, function(record) { return record.get(gApp.fieldName);}), function(item) { return item.get(gApp.fieldName);});
                 //Now run through all days looking for those states
                 var xz = [];
-                _.each(gApp.uniqueStates, function(state) {
+                _.each(me.fieldVals, function(state) {
                     var xx =  _.map(allsnapshots, function(snapshots) {
                         return _.filter(snapshots, function(snapshot) {
                             return snapshot.get(gApp.fieldName) === state;
@@ -320,13 +342,12 @@ Ext.define('Nik.Apps.SprintChangeChart', {
     },
 
     _drawStuff: function(yz) {
-        var n = gApp.uniqueStates.length;
+        var n = gApp.fieldVals.length;
 
         svg = d3.select('svg');
         gApp._clearSVG(svg);
         svg.attr('width', gApp.el.getWidth() - 50);
-        svg.attr('height', gApp.el.getHeight() - gApp.down('#headerBox').getHeight());  //Leave a bit at the top for combo box
-    
+        svg.attr('height', gApp.el.getHeight() - (gApp.down('#headerBox').getHeight() + 50));  //Leave a bit at the top for combo box
         // n = 5,
         // m = 58
         //  xz = _.pluck(gApp.dates, function(date) { return new Date(date.start);});
@@ -446,7 +467,7 @@ Ext.define('Nik.Apps.SprintChangeChart', {
     _mouseOver: function(d,i, arr) {
 
         var artefacts = _.pluck( _.filter( gApp.allSnapShots[i], function(snapshot) {
-                    return snapshot.get(gApp.fieldName) === gApp.uniqueStates[d[2]];
+                    return snapshot.get(gApp.fieldName) === gApp.fieldVals[d[2]];
                 }),
                 function(snapshot) {
                     var from = snapshot.get('_PreviousValues.'+gApp.fieldName) || '';
@@ -457,7 +478,7 @@ Ext.define('Nik.Apps.SprintChangeChart', {
                 }
         );
         gApp.tooltip.attr( 'transform',
-            `translate(${d3.event.offsetX},${d3.event.offsetY})`
+            `translate(${d3.event.layerX},${d3.event.layerY})`
         );
         gApp.callout(gApp.tooltip, artefacts.join('\n'));
     },
@@ -514,16 +535,60 @@ Ext.define('Nik.Apps.SprintChangeChart', {
     artefactType: null,
 
     launch: function() {
-
         //What type(s) are we going to do this for
         this.artefactType = this.getSetting('artefact');    //Defaults to HierarchicalRequirement
         this.fieldName = this.getSetting('field');          //Defaults to ScheduleState
+
+        this._getFieldValues().then({
+            success: function(vals) {
+                this.fieldVals = vals;
+                this._startApp();
+            },
+            failure: function(e) {
+                debugger;
+            },
+            scope: this
+        })
+    },
+
+    _getFieldValues: function() {
+        var deferred = Ext.create('Deft.Deferred');
+        Rally.data.ModelFactory.getModel({
+            type: 'HierarchicalRequirement',
+            success: function(model) {
+                var field = model.getField(this.fieldName);
+                if (field.getType() === 'boolean') {
+                    deferred.resolve([true, false]);
+                    return;
+                }
+                field.getAllowedValueStore().load({
+                    callback: function(records, operation, success) {
+                        if (success){
+                            var vals = _.map(records, function(r){ return r.get('StringValue').length === 0 ? "None" : r.get('StringValue'); });
+                            deferred.resolve(vals);
+                        } else {
+                            Rally.ui.notify.Notifier.showError({message: "Error fetching category data"});
+                            deferred.reject();
+                        }
+                    },
+                    scope: this
+                });
+            },
+            scope: this
+        });
+        return deferred.promise;
+    },
+
+    _startApp: function() {
+
 
         this.down('#headerBox').insert(0,
             [
                 {
                     xtype: 'rallyiterationcombobox',
                     itemId: 'iterationCombo',
+                    stateful: true,
+                    stateId: gApp.getContext().getScopedStateId('ricbox'),
                     storeConfig: {
                         listeners: {
                             load: function() {
